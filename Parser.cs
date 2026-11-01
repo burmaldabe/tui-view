@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace TuiView;
@@ -8,57 +10,161 @@ class Program
 {
     static void Main()
     {
-        // ===== ДАННЫЕ В МАССИВЕ =====
-        // Первая строка — заголовок, остальные — данные.
-        // Можно менять содержимое — таблица подстроится.
-        string[][] data =
-        {
-            new[] { "id", "name", "age" },
-            new[] { "0", "Ivan Ivanov", "20" },
-            new[] { "1", "Petr Petrov", "28" },
-            new[] { "2", "Nikita Nikitov", "18" },
-        };
+        // =========================================================
+        // ДАННЫЕ В ФОРМАТЕ CSV (зашиты в код)
+        // =========================================================
+        string csvData =
+@"id,user,email,age,role,status,comment
+1,Ivan Ivanov,ivan@example.com,20,admin,active,Обычный клиент
+2,Petr Petrov,petr@example.com,28,user,active,Клиент просил перезвонить
+3,Nikita Nikitov,nikita@example.com,18,user,closed,Отказ передумал
+4,Anna Smirnova,anna@example.com,35,manager,active,Постоянный клиент
+5,Oleg Kuznetsov,oleg@example.com,41,user,blocked,Нарушение правил
+6,Elena Popova,elena@example.com,22,user,active,Ожидает подтверждения
+7,Dmitry Volkov,dmitry@example.com,19,user,closed,Сам отказался
+8,Olga Sokolova,olga@example.com,31,admin,active,Техническая поддержка
+9,Sergey Morozov,sergey@example.com,45,user,active,Повторный заказ
+10,Tatiana Novikova,tatiana@example.com,26,manager,active,Новый сотрудник";
 
-        // ===== ПРОВЕРКА =====
-        if (data.Length == 0 || data[0].Length == 0)
+        // Парсим CSV
+        string[] lines = csvData.Replace("\r\n", "\n").Split('\n');
+        var rows = new List<string[]>();
+        string[] header = null;
+
+        foreach (var line in lines)
         {
-            Console.Error.WriteLine("[error] данных нет");
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            string[] cells = line.Split(',');
+            if (header == null) header = cells;
+            else rows.Add(cells);
+        }
+
+        if (header == null)
+        {
+            Console.WriteLine("Нет данных для вывода.");
             return;
         }
 
-        string[] header = data[0];
-        int colCount = header.Length;
+        // =========================================================
+        // МЕНЮ ВЫБОРА
+        // =========================================================
+        Console.WriteLine("Выберите действие:");
+        Console.WriteLine("1 - Вывод всей таблицы");
+        Console.WriteLine("2 - Вывод структуры (колонки, типы, макс. длина, ключи)");
+        Console.Write("Ваш выбор: ");
 
-        // Данные (без заголовка), нормализованные под число колонок
-        var rows = new List<string[]>();
-        for (int r = 1; r < data.Length; r++)
+        string choice = Console.ReadLine();
+
+        if (choice == "1")
         {
-            var cells = new string[colCount];
-            for (int i = 0; i < colCount; i++)
-                cells[i] = i < data[r].Length ? data[r][i] : "";
-            rows.Add(cells);
+            string renderedTable = RenderTable(header, rows);
+            DisplayWithPager(renderedTable);
+        }
+        else if (choice == "2")
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("--- СТРУКТУРА ТАБЛИЦЫ ---");
+            sb.AppendLine($"Всего колонок: {header.Length} | Всего строк: {rows.Count}");
+            sb.AppendLine(new string('-', 90));
+
+            for (int i = 0; i < header.Length; i++)
+            {
+                string colName = header[i];
+                string colType = DetermineType(rows, i);
+
+                // Считаем максимальную длину значения в колонке
+                int maxLen = 0;
+                foreach (var row in rows)
+                {
+                    if (i < row.Length && row[i].Length > maxLen)
+                        maxLen = row[i].Length;
+                }
+
+                // Определяем ключи по названию колонки
+                string keyInfo = "";
+                if (colName.Equals("id", StringComparison.OrdinalIgnoreCase))
+                {
+                    keyInfo = " [PK] Первичный ключ";
+                }
+                else if (colName.EndsWith("_id", StringComparison.OrdinalIgnoreCase))
+                {
+                    string refTable = colName.Substring(0, colName.Length - 3) + "s";
+                    keyInfo = $" [FK] Ссылается на таблицу {refTable}";
+                }
+
+                // Формируем строку (используем PadRight для ровных столбцов)
+                string lineInfo = $"- {colName.PadRight(12)} | Тип: {colType.PadRight(6)} | Макс. длина: {maxLen.ToString().PadRight(3)} |{keyInfo}";
+                sb.AppendLine(lineInfo);
+            }
+
+            DisplayWithPager(sb.ToString());
+        }
+        else
+        {
+            Console.WriteLine("Неверный выбор. Доступно только 1 или 2.");
         }
 
-        // ===== ШИРИНА КОЛОНОК =====
+        Console.WriteLine("\nНажмите любую клавишу для выхода...");
+        Console.ReadKey();
+    }
+
+    // ==========================================
+    // ЛОГИКА ОПРЕДЕЛЕНИЯ ТИПА
+    // ==========================================
+    static string DetermineType(List<string[]> rows, int colIndex)
+    {
+        bool isInt = true;
+        bool isFloat = true;
+        bool hasData = false;
+
+        foreach (var row in rows)
+        {
+            if (colIndex >= row.Length || string.IsNullOrWhiteSpace(row[colIndex]))
+                continue;
+
+            hasData = true;
+            string val = row[colIndex];
+
+            if (!int.TryParse(val, out _)) isInt = false;
+            if (!double.TryParse(val.Replace('.', ','), out _)) isFloat = false;
+        }
+
+        if (!hasData) return "string";
+        if (isInt) return "int";
+        if (isFloat) return "float";
+        return "string";
+    }
+
+    // ==========================================
+    // ЛОГИКА РИСОВАНИЯ ТАБЛИЦЫ
+    // ==========================================
+    static string RenderTable(string[] headers, List<string[]> rows)
+    {
+        int colCount = headers.Length;
         int[] widths = new int[colCount];
-        for (int i = 0; i < colCount; i++) widths[i] = header[i].Length;
+
+        for (int i = 0; i < colCount; i++) widths[i] = headers[i].Length;
         foreach (var row in rows)
             for (int i = 0; i < colCount; i++)
-                if (row[i].Length > widths[i]) widths[i] = row[i].Length;
+            {
+                string val = i < row.Length ? row[i] : "";
+                if (val.Length > widths[i]) widths[i] = val.Length;
+            }
 
-        // ===== ПЕЧАТЬ =====
-        Console.WriteLine(Separator(widths));
-        Console.WriteLine(RowLine(header, widths));
-        Console.WriteLine(Separator(widths));
+        var sb = new StringBuilder();
+
+        sb.AppendLine(Separator(widths));
+        sb.AppendLine(RowLine(headers, widths));
+        sb.AppendLine(Separator(widths));
 
         for (int i = 0; i < rows.Count; i++)
         {
-            Console.WriteLine(RowLine(rows[i], widths));
-            if (i < rows.Count - 1)
-                Console.WriteLine(Separator(widths));
+            sb.AppendLine(RowLine(rows[i], widths));
+            if (i < rows.Count - 1) sb.AppendLine(Separator(widths));
         }
 
-        Console.WriteLine(Separator(widths));
+        sb.AppendLine(Separator(widths));
+        return sb.ToString();
     }
 
     static string Separator(int[] widths)
@@ -85,5 +191,44 @@ class Program
             sb.Append('|');
         }
         return sb.ToString();
+    }
+
+    // ==========================================
+    // PAGER (вывод по страницам)
+    // ==========================================
+    static void DisplayWithPager(string content)
+    {
+        int height = 0;
+        try { height = Console.WindowHeight; } catch { }
+
+        bool needsPager = height > 0 && content.Split('\n').Length > height - 4;
+
+        if (!needsPager)
+        {
+            Console.WriteLine(content);
+            return;
+        }
+
+        string pagerProgram = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "more" : "less";
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = pagerProgram,
+                RedirectStandardInput = true,
+                UseShellExecute = false,
+            };
+            using var process = Process.Start(psi);
+            if (process != null)
+            {
+                using (var writer = process.StandardInput) writer.Write(content);
+                process.WaitForExit();
+                return;
+            }
+        }
+        catch { /* Если пайпер не запустился - просто выводим */ }
+
+        Console.WriteLine(content);
     }
 }
